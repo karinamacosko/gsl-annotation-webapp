@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GSL Annotation Tool</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>English &rarr; Ghanaian Sign Language Annotation</h1>
+  <div id="user-bar" class="hidden">
+    <span id="user-label"></span>
+    <a href="/api/annotations.csv" class="link">Download CSV</a>
+    <button id="switch-user" class="link-btn">Switch user</button>
+  </div>
+</header>
+
+<main>
+  <!-- LOGIN -->
+  <section id="screen-login" class="screen">
+    <div class="card">
+      <h2>Who is annotating?</h2>
+      <label>Select an existing annotator
+        <select id="existing-users"><option value="">-- choose --</option></select>
+      </label>
+      <button id="btn-login" class="primary">Continue</button>
+    </div>
+    <div class="card">
+      <h2>Or create an account</h2>
+      <label>Your name <input id="new-name" type="text" placeholder="e.g. Ama Mensah" autocomplete="off"></label>
+      <label>Association <select id="new-association"></select></label>
+      <button id="btn-create" class="primary">Create account</button>
+      <p class="error" id="create-error"></p>
+    </div>
+  </section>
+
+  <!-- GUIDE -->
+  <section id="screen-guide" class="screen hidden">
+    <div class="card wide">
+      <h2>Translating English into Ghanaian Sign Language (GSL) grammar</h2>
+      <p>GSL has its own grammar. When you annotate, do <strong>not</strong> write the English words in English order.
+        Instead, write the <em>signs</em> you would produce, in the order you would sign them, using tokens
+        (glosses) from the GSL dictionary. Glosses are always written in CAPITAL LETTERS.</p>
+
+      <h3>Key patterns</h3>
+      <ul>
+        <li><strong>Topic first, then comment.</strong> Set the scene (time, place, subject) before the action.</li>
+        <li><strong>Question words usually come at the end.</strong> <code>WHAT</code>, <code>WHERE</code>, <code>WHO</code>, <code>WHY</code>, <code>HOW-MANY</code> typically close the sentence.</li>
+        <li><strong>Time markers come first.</strong> <code>YESTERDAY</code>, <code>TOMORROW</code>, <code>NOW</code> usually open the sentence; tense is not marked on the verb.</li>
+        <li><strong>Drop function words</strong> that have no sign: <em>is, are, the, a, to, of</em>. Articles and most forms of "to be" are not signed.</li>
+        <li><strong>Negation</strong> often follows the verb: <code>ME UNDERSTAND NOT</code>.</li>
+        <li><strong>Facial expressions and body movements</strong> (eyebrows raised for yes/no questions, furrowed for WH-questions, head shake for negation) are
+          <em>non-manual markers</em>. Note them in the optional "Non-manual markers" box.</li>
+      </ul>
+
+      <h3>Examples</h3>
+      <table class="examples">
+        <thead><tr><th>English</th><th>GSL gloss</th></tr></thead>
+        <tbody>
+          <tr><td>What is your name?</td><td><code>YOUR NAME WHAT?</code></td></tr>
+          <tr><td>I am going to school tomorrow.</td><td><code>TOMORROW ME GO SCHOOL</code></td></tr>
+          <tr><td>Where do you live?</td><td><code>YOU LIVE WHERE?</code></td></tr>
+          <tr><td>I don't understand.</td><td><code>ME UNDERSTAND NOT</code></td></tr>
+          <tr><td>My sister is a nurse in Kumasi.</td><td><code>MY SISTER NURSE KUMASI</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3>How to enter tokens</h3>
+      <ul>
+        <li>Start typing a sign; matching dictionary tokens appear. Use the arrow keys or the mouse and press <kbd>Enter</kbd> to add it.</li>
+        <li><span class="chip chip-fs demo">fs-"ACCRA"</span> &mdash; if a word should be <strong>fingerspelled</strong>, choose <code>fs-</code> and type the letters. It becomes one token, e.g. <code>fs-"Example"</code>.</li>
+        <li><span class="chip chip-missing demo">SIGN_NOT_FOUND</span> &mdash; if a word has <strong>no sign in the dictionary</strong>, choose <code>SIGN_NOT_FOUND</code>. You may suggest a sign; it stays highlighted as a different kind of token.</li>
+        <li>Press <kbd>Backspace</kbd> in the empty box to remove the last token. Click a token to remove it, or use the arrows to reorder.</li>
+        <li>Before submitting, rate your <strong>confidence</strong> from 1 (unsure) to 3 (very confident).</li>
+      </ul>
+      <button id="btn-start" class="primary">Start annotating</button>
+    </div>
+  </section>
+
+  <!-- ANNOTATE -->
+  <section id="screen-annotate" class="screen hidden">
+    <div class="progress-wrap">
+      <div class="progress"><div id="progress-bar"></div></div>
+      <div id="progress-text"></div>
+    </div>
+
+    <div class="card wide" id="annotate-card">
+      <div class="sentence-meta" id="sentence-meta"></div>
+      <div class="sentence" id="sentence-text"></div>
+
+      <label class="block-label">GSL gloss</label>
+      <div id="token-box" class="token-box">
+        <div id="chips"></div>
+        <div class="input-wrap">
+          <input id="token-input" type="text" placeholder="Start typing a sign..." autocomplete="off" spellcheck="false">
+          <ul id="suggestions" class="suggestions hidden"></ul>
+        </div>
+      </div>
+      <div id="special-entry" class="special-entry hidden">
+        <span id="special-label"></span>
+        <input id="special-input" type="text" autocomplete="off">
+        <button id="special-ok" class="small">Add</button>
+        <button id="special-cancel" class="small ghost">Cancel</button>
+      </div>
+      <div class="gloss-preview">Preview: <code id="gloss-preview"></code></div>
+
+      <label class="block-label">Non-manual markers <span class="muted">(optional)</span>
+        <input id="nmm" type="text" placeholder="e.g. eyebrows raised, head shake on NOT">
+      </label>
+      <label class="block-label">Notes <span class="muted">(optional)</span>
+        <textarea id="notes" rows="2"></textarea>
+      </label>
+
+      <fieldset class="confidence">
+        <legend>How confident are you in this annotation?</legend>
+        <label><input type="radio" name="confidence" value="1"> 1 &ndash; Not sure</label>
+        <label><input type="radio" name="confidence" value="2"> 2 &ndash; Fairly confident</label>
+        <label><input type="radio" name="confidence" value="3"> 3 &ndash; Very confident</label>
+      </fieldset>
+
+      <p class="error" id="submit-error"></p>
+      <button id="btn-submit" class="primary">Submit annotation</button>
+    </div>
+
+    <div class="card wide hidden" id="done-card">
+      <h2 id="done-title"></h2>
+      <p id="done-text"></p>
+      <a href="/api/annotations.csv" class="primary btn-link">Download annotations CSV</a>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
