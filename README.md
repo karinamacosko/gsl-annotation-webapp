@@ -13,11 +13,13 @@ uvicorn app.main:app --port 5000            # http://localhost:5000
 
 - `data/sentences.csv` – the 1000 English sentences (input).
 - `data/tokens.csv` – GSL dictionary tokens used for autocomplete.
-- `data/users.json` – annotator accounts (created from the UI, no authentication).
-- `data/associations.json` – extra associations added by annotators via "Other".
-- `data/annotations.csv` – output; one row per submission with the columns
+- `data/gsl.sqlite3` (or `$GSL_DATA_DIR/gsl.sqlite3`) – SQLite database holding annotator
+  accounts (no authentication), extra associations added via "Other", and annotations
+  (one row per submission, unique per sentence+annotator; safe for concurrent annotators).
+  Existing `annotations.csv` / `users.json` / `associations.json` files in the data dir are
+  imported automatically on first start.
+- Download the annotations as CSV at `/api/annotations.csv` with the columns
   `id, english_sentence, category, sentence_type, word_count, length_band, gsl_gloss, annotator_id, annotator_role, timestamp, confidence, non_manual_markers, flagged_missing_sign, notes`.
-  Download it at `/api/annotations.csv`.
 
 ## Assignment rules
 
@@ -35,7 +37,7 @@ uvicorn app.main:app --port 5000            # http://localhost:5000
 ## Hosting
 
 The repo includes a `Dockerfile`, `fly.toml` (Fly.io) and `render.yaml` (Render).
-Writable data (annotations, users, associations) goes to `GSL_DATA_DIR`
+Writable data (the SQLite database `gsl.sqlite3` holding annotations, users and associations) goes to `GSL_DATA_DIR`
 (default `/data`), so mount a persistent volume there.
 
 - Fly.io: `fly launch --copy-config --no-deploy && fly volumes create gsl_data --size 1 && fly deploy`

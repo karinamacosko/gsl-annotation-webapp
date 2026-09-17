@@ -4,3 +4,4 @@ __pycache__/
 data/associations.json
 *.egg-info/
 build/
+data/gsl.sqlite3*

@@ -1,11 +1,12 @@
 import csv
+import io
 import json
 import os
-import threading
+import sqlite3
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -18,9 +19,11 @@ TOKENS_CSV = os.path.join(DATA, "tokens.csv")
 # (a /data mount is picked up automatically if it exists).
 WRITE_DIR = os.environ.get("GSL_DATA_DIR") or ("/data" if os.path.isdir("/data") else DATA)
 os.makedirs(WRITE_DIR, exist_ok=True)
-ANNOTATIONS_CSV = os.path.join(WRITE_DIR, "annotations.csv")
-USERS_JSON = os.path.join(WRITE_DIR, "users.json")
-ASSOCIATIONS_JSON = os.path.join(WRITE_DIR, "associations.json")
+DB_PATH = os.path.join(WRITE_DIR, "gsl.sqlite3")
+# Legacy flat files, imported into the database once if present.
+LEGACY_ANNOTATIONS_CSV = os.path.join(WRITE_DIR, "annotations.csv")
+LEGACY_USERS_JSON = os.path.join(WRITE_DIR, "users.json")
+LEGACY_ASSOCIATIONS_JSON = os.path.join(WRITE_DIR, "associations.json")
 
 # Every Nth sentence (by position) is annotated by 3 different annotators.
 MULTI_ANNOTATION_EVERY = int(os.environ.get("GSL_MULTI_EVERY", "4"))  # 1000/4 = 250 sentences
@@ -38,7 +41,79 @@ ANNOTATION_COLUMNS = [
 ]
 
 app = FastAPI(title="GSL Annotation Tool")
-lock = threading.Lock()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    association TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS users_name_ci ON users (lower(name));
+CREATE TABLE IF NOT EXISTS associations (
+    name TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS annotations (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL,
+    english_sentence TEXT NOT NULL,
+    category TEXT NOT NULL,
+    sentence_type TEXT NOT NULL,
+    word_count TEXT NOT NULL,
+    length_band TEXT NOT NULL,
+    gsl_gloss TEXT NOT NULL,
+    annotator_id TEXT NOT NULL,
+    annotator_role TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    confidence INTEGER NOT NULL,
+    non_manual_markers TEXT NOT NULL DEFAULT '',
+    flagged_missing_sign TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    UNIQUE (id, annotator_id)
+);
+"""
+
+
+def connect():
+    conn = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def import_legacy_files(conn):
+    if os.path.exists(LEGACY_ASSOCIATIONS_JSON):
+        with open(LEGACY_ASSOCIATIONS_JSON, encoding="utf-8") as f:
+            conn.executemany("INSERT OR IGNORE INTO associations (name) VALUES (?)", [(a,) for a in json.load(f)])
+    if os.path.exists(LEGACY_USERS_JSON):
+        with open(LEGACY_USERS_JSON, encoding="utf-8") as f:
+            conn.executemany(
+                "INSERT OR IGNORE INTO users (id, name, association, created_at) VALUES (?, ?, ?, ?)",
+                [(u["id"], u["name"], u["association"], u["created_at"]) for u in json.load(f)],
+            )
+    if os.path.exists(LEGACY_ANNOTATIONS_CSV):
+        with open(LEGACY_ANNOTATIONS_CSV, newline="", encoding="utf-8") as f:
+            rows = [{k: r.get(k, "") for k in ANNOTATION_COLUMNS} for r in csv.DictReader(f)]
+        conn.executemany(
+            f"INSERT OR IGNORE INTO annotations ({', '.join(ANNOTATION_COLUMNS)}) "
+            f"VALUES ({', '.join(':' + c for c in ANNOTATION_COLUMNS)})",
+            rows,
+        )
+
+
+def init_db():
+    conn = connect()
+    try:
+        conn.executescript(SCHEMA)
+        if conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 0 and \
+                conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+            conn.execute("BEGIN IMMEDIATE")
+            import_legacy_files(conn)
+            conn.execute("COMMIT")
+    finally:
+        conn.close()
 
 
 def load_sentences():
@@ -69,48 +144,17 @@ SENTENCE_BY_ID = {s["id"]: s for s in SENTENCES}
 TOKENS = load_tokens()
 
 
-def load_associations():
-    extra = []
-    if os.path.exists(ASSOCIATIONS_JSON):
-        with open(ASSOCIATIONS_JSON, encoding="utf-8") as f:
-            extra = json.load(f)
+def load_associations(conn):
+    extra = [r["name"] for r in conn.execute("SELECT name FROM associations ORDER BY name")]
     return DEFAULT_ASSOCIATIONS + [a for a in extra if a not in DEFAULT_ASSOCIATIONS]
 
 
-def save_association(name):
-    assocs = load_associations()
-    if name not in assocs:
-        extra = [a for a in assocs if a not in DEFAULT_ASSOCIATIONS] + [name]
-        with open(ASSOCIATIONS_JSON, "w", encoding="utf-8") as f:
-            json.dump(extra, f, indent=2)
+def load_users(conn):
+    return [dict(r) for r in conn.execute("SELECT id, name, association, created_at FROM users ORDER BY created_at")]
 
 
-def load_users():
-    if not os.path.exists(USERS_JSON):
-        return []
-    with open(USERS_JSON, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_users(users):
-    with open(USERS_JSON, "w", encoding="utf-8") as f:
-        json.dump(users, f, indent=2)
-
-
-def load_annotations():
-    if not os.path.exists(ANNOTATIONS_CSV):
-        return []
-    with open(ANNOTATIONS_CSV, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
-
-
-def append_annotation(row):
-    new_file = not os.path.exists(ANNOTATIONS_CSV)
-    with open(ANNOTATIONS_CSV, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=ANNOTATION_COLUMNS)
-        if new_file:
-            w.writeheader()
-        w.writerow(row)
+def load_annotations(conn):
+    return [dict(r) for r in conn.execute("SELECT id, annotator_id FROM annotations")]
 
 
 def progress_state(annotations):
@@ -173,8 +217,10 @@ def healthz():
 
 @app.get("/api/meta")
 def meta():
+    with connect() as conn:
+        associations = load_associations(conn)
     return {
-        "associations": load_associations(),
+        "associations": associations,
         "total_sentences": len(SENTENCES),
         "multi_count": sum(1 for s in SENTENCES if s["required"] > 1),
         "multi_required": MULTI_ANNOTATION_COUNT,
@@ -188,7 +234,8 @@ def tokens():
 
 @app.get("/api/users")
 def get_users():
-    return load_users()
+    with connect() as conn:
+        return load_users(conn)
 
 
 @app.post("/api/users", status_code=201)
@@ -199,15 +246,18 @@ def create_user(body: NewUser):
         return error(400, "Name is required")
     if not association:
         return error(400, "Association is required")
-    with lock:
-        save_association(association)
-        users = load_users()
-        if any(u["name"].lower() == name.lower() for u in users):
+    conn = connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if association not in DEFAULT_ASSOCIATIONS:
+            conn.execute("INSERT OR IGNORE INTO associations (name) VALUES (?)", (association,))
+        if conn.execute("SELECT 1 FROM users WHERE lower(name) = lower(?)", (name,)).fetchone():
+            conn.execute("ROLLBACK")
             return error(409, "A user with that name already exists")
-        slug = "".join(c if c.isalnum() else "_" for c in name.lower()).strip("_")
+        slug = "".join(c if c.isalnum() else "_" for c in name.lower()).strip("_") or "user"
         user_id = slug
         n = 2
-        while any(u["id"] == user_id for u in users):
+        while conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
             user_id = f"{slug}_{n}"
             n += 1
         user = {
@@ -216,8 +266,13 @@ def create_user(body: NewUser):
             "association": association,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        users.append(user)
-        save_users(users)
+        conn.execute(
+            "INSERT INTO users (id, name, association, created_at) VALUES (:id, :name, :association, :created_at)",
+            user,
+        )
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
     return JSONResponse(user, status_code=201)
 
 
@@ -225,11 +280,11 @@ def create_user(body: NewUser):
 def next_sentence(annotator_id: str = Query("")):
     if not annotator_id:
         return error(400, "annotator_id required")
-    with lock:
-        annotations = load_annotations()
-        s = next_sentence_for(annotator_id, annotations)
-        _, done, required = progress_state(annotations)
-        mine = sum(1 for a in annotations if a["annotator_id"] == annotator_id)
+    with connect() as conn:
+        annotations = load_annotations(conn)
+    s = next_sentence_for(annotator_id, annotations)
+    _, done, required = progress_state(annotations)
+    mine = sum(1 for a in annotations if a["annotator_id"] == annotator_id)
     payload = {
         "progress": {"done": done, "required": required, "mine": mine},
         "all_complete": done >= required,
@@ -271,14 +326,11 @@ def submit_annotation(body: Submission):
         else:
             return error(400, f"Unknown token kind: {t.kind}")
 
-    with lock:
-        users = {u["id"]: u for u in load_users()}
-        user = users.get(annotator_id)
+    conn = connect()
+    try:
+        user = conn.execute("SELECT association FROM users WHERE id = ?", (annotator_id,)).fetchone()
         if user is None:
             return error(400, "Unknown annotator")
-        annotations = load_annotations()
-        if any(a["id"] == body.id and a["annotator_id"] == annotator_id for a in annotations):
-            return error(409, "You already annotated this sentence")
         row = {
             "id": s["id"],
             "english_sentence": s["english_sentence"],
@@ -295,16 +347,35 @@ def submit_annotation(body: Submission):
             "flagged_missing_sign": "yes" if flagged else "no",
             "notes": body.notes.strip(),
         }
-        append_annotation(row)
+        try:
+            conn.execute(
+                f"INSERT INTO annotations ({', '.join(ANNOTATION_COLUMNS)}) "
+                f"VALUES ({', '.join(':' + c for c in ANNOTATION_COLUMNS)})",
+                row,
+            )
+        except sqlite3.IntegrityError:
+            return error(409, "You already annotated this sentence")
+    finally:
+        conn.close()
     return JSONResponse({"ok": True, "gsl_gloss": row["gsl_gloss"]}, status_code=201)
 
 
 @app.get("/api/annotations.csv")
 def download_annotations():
-    if not os.path.exists(ANNOTATIONS_CSV):
-        return PlainTextResponse(",".join(ANNOTATION_COLUMNS) + "\n", media_type="text/csv")
-    return FileResponse(ANNOTATIONS_CSV, media_type="text/csv", filename="annotations.csv")
+    with connect() as conn:
+        rows = conn.execute(f"SELECT {', '.join(ANNOTATION_COLUMNS)} FROM annotations ORDER BY seq").fetchall()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(ANNOTATION_COLUMNS)
+    w.writerows(tuple(r) for r in rows)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="annotations.csv"'},
+    )
 
+
+init_db()
 
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
 
