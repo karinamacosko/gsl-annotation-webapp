@@ -6,7 +6,7 @@ Web app for building a dataset of English sentences translated into Ghanaian Sig
 
 ```bash
 pip install -r requirements.txt
-python app.py            # http://localhost:5000
+uvicorn app.main:app --port 5000            # http://localhost:5000
 ```
 
 ## Data

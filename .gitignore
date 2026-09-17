@@ -2,3 +2,4 @@ data/annotations.csv
 data/users.json
 __pycache__/
 data/associations.json
+*.egg-info/
