@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: gsl-annotator
+    runtime: docker
+    plan: starter
+    envVars:
+      - key: GSL_DATA_DIR
+        value: /data
+    disk:
+      name: gsl-data
+      mountPath: /data
+      sizeGB: 1

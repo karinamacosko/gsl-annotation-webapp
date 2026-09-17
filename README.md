@@ -31,3 +31,12 @@ uvicorn app.main:app --port 5000            # http://localhost:5000
 - Dictionary signs: `HELLO`
 - Fingerspelling: `fs-"Accra"`
 - Missing sign: `SIGN_NOT_FOUND` or `SIGN_NOT_FOUND(SUGGESTED)`; sets `flagged_missing_sign=yes`.
+
+## Hosting
+
+The repo includes a `Dockerfile`, `fly.toml` (Fly.io) and `render.yaml` (Render).
+Writable data (annotations, users, associations) goes to `GSL_DATA_DIR`
+(default `/data`), so mount a persistent volume there.
+
+- Fly.io: `fly launch --copy-config --no-deploy && fly volumes create gsl_data --size 1 && fly deploy`
+- Render: create a new Blueprint from this repo (uses `render.yaml`, includes a 1 GB disk).
