@@ -14,6 +14,7 @@ python app.py            # http://localhost:5000
 - `data/sentences.csv` – the 1000 English sentences (input).
 - `data/tokens.csv` – GSL dictionary tokens used for autocomplete.
 - `data/users.json` – annotator accounts (created from the UI, no authentication).
+- `data/associations.json` – extra associations added by annotators via "Other".
 - `data/annotations.csv` – output; one row per submission with the columns
   `id, english_sentence, category, sentence_type, word_count, length_band, gsl_gloss, annotator_id, annotator_role, timestamp, confidence, non_manual_markers, flagged_missing_sign, notes`.
   Download it at `/api/annotations.csv`.

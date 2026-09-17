@@ -30,6 +30,7 @@
       <h2>Or create an account</h2>
       <label>Your name <input id="new-name" type="text" placeholder="e.g. Ama Mensah" autocomplete="off"></label>
       <label>Association <select id="new-association"></select></label>
+      <label id="custom-association-wrap" class="hidden">New association name <input id="custom-association" type="text" placeholder="e.g. University of Ghana" autocomplete="off"></label>
       <button id="btn-create" class="primary">Create account</button>
       <p class="error" id="create-error"></p>
     </div>
@@ -39,20 +40,9 @@
   <section id="screen-guide" class="screen hidden">
     <div class="card wide">
       <h2>Translating English into Ghanaian Sign Language (GSL) grammar</h2>
-      <p>GSL has its own grammar. When you annotate, do <strong>not</strong> write the English words in English order.
-        Instead, write the <em>signs</em> you would produce, in the order you would sign them, using tokens
-        (glosses) from the GSL dictionary. Glosses are always written in CAPITAL LETTERS.</p>
-
-      <h3>Key patterns</h3>
-      <ul>
-        <li><strong>Topic first, then comment.</strong> Set the scene (time, place, subject) before the action.</li>
-        <li><strong>Question words usually come at the end.</strong> <code>WHAT</code>, <code>WHERE</code>, <code>WHO</code>, <code>WHY</code>, <code>HOW-MANY</code> typically close the sentence.</li>
-        <li><strong>Time markers come first.</strong> <code>YESTERDAY</code>, <code>TOMORROW</code>, <code>NOW</code> usually open the sentence; tense is not marked on the verb.</li>
-        <li><strong>Drop function words</strong> that have no sign: <em>is, are, the, a, to, of</em>. Articles and most forms of "to be" are not signed.</li>
-        <li><strong>Negation</strong> often follows the verb: <code>ME UNDERSTAND NOT</code>.</li>
-        <li><strong>Facial expressions and body movements</strong> (eyebrows raised for yes/no questions, furrowed for WH-questions, head shake for negation) are
-          <em>non-manual markers</em>. Note them in the optional "Non-manual markers" box.</li>
-      </ul>
+      <p>Please translate the sentences to Ghanaian Sign Language grammar. Do <strong>not</strong> write the English words in English order.
+        Instead, write the <em>signs</em> you would produce, in the order you would sign them, using the names of signs
+        from the GSL dictionary. Written forms of signs are always written in CAPITAL LETTERS.</p>
 
       <h3>Examples</h3>
       <table class="examples">
@@ -68,10 +58,10 @@
 
       <h3>How to enter tokens</h3>
       <ul>
-        <li>Start typing a sign; matching dictionary tokens appear. Use the arrow keys or the mouse and press <kbd>Enter</kbd> to add it.</li>
+        <li>Start typing a sign; matching dictionary signs appear. Tap one (or use the arrow keys and <kbd>Enter</kbd>) to add it.</li>
         <li><span class="chip chip-fs demo">fs-"ACCRA"</span> &mdash; if a word should be <strong>fingerspelled</strong>, choose <code>fs-</code> and type the letters. It becomes one token, e.g. <code>fs-"Example"</code>.</li>
         <li><span class="chip chip-missing demo">SIGN_NOT_FOUND</span> &mdash; if a word has <strong>no sign in the dictionary</strong>, choose <code>SIGN_NOT_FOUND</code>. You may suggest a sign; it stays highlighted as a different kind of token.</li>
-        <li>Press <kbd>Backspace</kbd> in the empty box to remove the last token. Click a token to remove it, or use the arrows to reorder.</li>
+        <li>Tap <b>&times;</b> on a token to remove it, or use <b>&lsaquo; &rsaquo;</b> to reorder. <kbd>Backspace</kbd> in the empty box removes the last token.</li>
         <li>Before submitting, rate your <strong>confidence</strong> from 1 (unsure) to 3 (very confident).</li>
       </ul>
       <button id="btn-start" class="primary">Start annotating</button>
@@ -87,6 +77,7 @@
 
     <div class="card wide" id="annotate-card">
       <div class="sentence-meta" id="sentence-meta"></div>
+      <div class="sentence-label">English sentence</div>
       <div class="sentence" id="sentence-text"></div>
 
       <label class="block-label">GSL gloss</label>
@@ -100,8 +91,10 @@
       <div id="special-entry" class="special-entry hidden">
         <span id="special-label"></span>
         <input id="special-input" type="text" autocomplete="off">
-        <button id="special-ok" class="small">Add</button>
-        <button id="special-cancel" class="small ghost">Cancel</button>
+        <div class="btn-row">
+          <button id="special-ok" class="small">Add</button>
+          <button id="special-cancel" class="small ghost">Cancel</button>
+        </div>
       </div>
       <div class="gloss-preview">Preview: <code id="gloss-preview"></code></div>
 

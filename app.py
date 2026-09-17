@@ -12,12 +12,13 @@ SENTENCES_CSV = os.path.join(DATA, "sentences.csv")
 TOKENS_CSV = os.path.join(DATA, "tokens.csv")
 ANNOTATIONS_CSV = os.path.join(DATA, "annotations.csv")
 USERS_JSON = os.path.join(DATA, "users.json")
+ASSOCIATIONS_JSON = os.path.join(DATA, "associations.json")
 
 # Every Nth sentence (by position) is annotated by 3 different annotators.
 MULTI_ANNOTATION_EVERY = int(os.environ.get("GSL_MULTI_EVERY", "4"))  # 1000/4 = 250 sentences
 MULTI_ANNOTATION_COUNT = 3
 
-ASSOCIATIONS = [
+DEFAULT_ASSOCIATIONS = [
     "Demonstration School for the Deaf Teacher",
     "Presbyterian College of Education",
 ]
@@ -58,6 +59,22 @@ def load_tokens():
 SENTENCES = load_sentences()
 SENTENCE_BY_ID = {s["id"]: s for s in SENTENCES}
 TOKENS = load_tokens()
+
+
+def load_associations():
+    extra = []
+    if os.path.exists(ASSOCIATIONS_JSON):
+        with open(ASSOCIATIONS_JSON, encoding="utf-8") as f:
+            extra = json.load(f)
+    return DEFAULT_ASSOCIATIONS + [a for a in extra if a not in DEFAULT_ASSOCIATIONS]
+
+
+def save_association(name):
+    assocs = load_associations()
+    if name not in assocs:
+        extra = [a for a in assocs if a not in DEFAULT_ASSOCIATIONS] + [name]
+        with open(ASSOCIATIONS_JSON, "w", encoding="utf-8") as f:
+            json.dump(extra, f, indent=2)
 
 
 def load_users():
@@ -121,7 +138,7 @@ def index():
 @app.route("/api/meta")
 def meta():
     return jsonify({
-        "associations": ASSOCIATIONS,
+        "associations": load_associations(),
         "total_sentences": len(SENTENCES),
         "multi_count": sum(1 for s in SENTENCES if s["required"] > 1),
         "multi_required": MULTI_ANNOTATION_COUNT,
@@ -145,9 +162,10 @@ def create_user():
     association = (body.get("association") or "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
-    if association not in ASSOCIATIONS:
-        return jsonify({"error": "Invalid association"}), 400
+    if not association:
+        return jsonify({"error": "Association is required"}), 400
     with lock:
+        save_association(association)
         users = load_users()
         if any(u["name"].lower() == name.lower() for u in users):
             return jsonify({"error": "A user with that name already exists"}), 409

@@ -11,6 +11,13 @@
   let activeIdx = -1;
   let pendingSpecial = null; // 'fs' | 'sign_not_found'
 
+  const OTHER = "__other__";
+  $("new-association").addEventListener("change", (e) => {
+    const isOther = e.target.value === OTHER;
+    $("custom-association-wrap").classList.toggle("hidden", !isOther);
+    if (isOther) $("custom-association").focus();
+  });
+
   const SPECIAL = [
     { kind: "fs", label: "fs-", hint: "Fingerspell a word", cls: "special-fs" },
     { kind: "sign_not_found", label: "SIGN_NOT_FOUND", hint: "No sign in dictionary (suggest one)", cls: "special-missing" },
@@ -39,6 +46,7 @@
       o.dataset.user = JSON.stringify(u);
       sel.appendChild(o);
     });
+    META = await api("/api/meta");
     const assoc = $("new-association");
     assoc.innerHTML = "";
     META.associations.forEach((a) => {
@@ -46,6 +54,10 @@
       o.value = a; o.textContent = a;
       assoc.appendChild(o);
     });
+    const other = document.createElement("option");
+    other.value = OTHER; other.textContent = "Other (add a new association)";
+    assoc.appendChild(other);
+    $("custom-association-wrap").classList.add("hidden");
     const saved = localStorage.getItem("gsl_user");
     if (saved) {
       const u = JSON.parse(saved);
@@ -70,11 +82,16 @@
 
   $("btn-create").onclick = async () => {
     $("create-error").textContent = "";
+    let assocValue = $("new-association").value;
+    if (assocValue === OTHER) {
+      assocValue = $("custom-association").value.trim();
+      if (!assocValue) { $("create-error").textContent = "Please enter the name of your association."; return; }
+    }
     try {
       const u = await api("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: $("new-name").value, association: $("new-association").value }),
+        body: JSON.stringify({ name: $("new-name").value, association: assocValue }),
       });
       setUser(u);
     } catch (e) {
@@ -207,7 +224,7 @@
       } else tok.textContent = s.token;
       const cat = document.createElement("span"); cat.className = "cat"; cat.textContent = s.cat;
       li.append(tok, cat);
-      li.onmousedown = (e) => { e.preventDefault(); choose(s); };
+      li.onpointerdown = (e) => { e.preventDefault(); choose(s); };
       ul.appendChild(li);
     });
     ul.classList.remove("hidden");
@@ -290,7 +307,7 @@
     else if (e.key === "Escape") hideSuggestions();
     else if (e.key === "Backspace" && !input.value && chips.length) { chips.pop(); renderChips(); }
   });
-  input.addEventListener("blur", () => setTimeout(hideSuggestions, 150));
+  input.addEventListener("blur", () => setTimeout(hideSuggestions, 200));
   $("token-box").addEventListener("click", (e) => { if (e.target === $("token-box") || e.target === $("chips")) input.focus(); });
 
   // ---------- Submit ----------
