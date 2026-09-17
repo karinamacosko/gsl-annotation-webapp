@@ -4,15 +4,23 @@ import os
 import threading
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, request, send_from_directory
+from fastapi import FastAPI, Query
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(BASE, "data")
 SENTENCES_CSV = os.path.join(DATA, "sentences.csv")
 TOKENS_CSV = os.path.join(DATA, "tokens.csv")
-ANNOTATIONS_CSV = os.path.join(DATA, "annotations.csv")
-USERS_JSON = os.path.join(DATA, "users.json")
-ASSOCIATIONS_JSON = os.path.join(DATA, "associations.json")
+
+# Writable output location. Set GSL_DATA_DIR to a persistent volume in production
+# (a /data mount is picked up automatically if it exists).
+WRITE_DIR = os.environ.get("GSL_DATA_DIR") or ("/data" if os.path.isdir("/data") else DATA)
+os.makedirs(WRITE_DIR, exist_ok=True)
+ANNOTATIONS_CSV = os.path.join(WRITE_DIR, "annotations.csv")
+USERS_JSON = os.path.join(WRITE_DIR, "users.json")
+ASSOCIATIONS_JSON = os.path.join(WRITE_DIR, "associations.json")
 
 # Every Nth sentence (by position) is annotated by 3 different annotators.
 MULTI_ANNOTATION_EVERY = int(os.environ.get("GSL_MULTI_EVERY", "4"))  # 1000/4 = 250 sentences
@@ -29,7 +37,7 @@ ANNOTATION_COLUMNS = [
     "non_manual_markers", "flagged_missing_sign", "notes",
 ]
 
-app = Flask(__name__, static_folder="static", static_url_path="/static")
+app = FastAPI(title="GSL Annotation Tool")
 lock = threading.Lock()
 
 
@@ -130,45 +138,72 @@ def next_sentence_for(annotator_id, annotations):
     return candidates[0][1]
 
 
-@app.route("/")
+def error(status, message):
+    return JSONResponse({"error": message}, status_code=status)
+
+
+class NewUser(BaseModel):
+    name: str = ""
+    association: str = ""
+
+
+class Token(BaseModel):
+    kind: str
+    value: str = ""
+
+
+class Submission(BaseModel):
+    id: str
+    annotator_id: str = ""
+    tokens: list[Token] = []
+    confidence: int | None = None
+    non_manual_markers: str = ""
+    notes: str = ""
+
+
+@app.get("/")
 def index():
-    return send_from_directory("static", "index.html")
+    return FileResponse(os.path.join(BASE, "static", "index.html"))
 
 
-@app.route("/api/meta")
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
+@app.get("/api/meta")
 def meta():
-    return jsonify({
+    return {
         "associations": load_associations(),
         "total_sentences": len(SENTENCES),
         "multi_count": sum(1 for s in SENTENCES if s["required"] > 1),
         "multi_required": MULTI_ANNOTATION_COUNT,
-    })
+    }
 
 
-@app.route("/api/tokens")
+@app.get("/api/tokens")
 def tokens():
-    return jsonify(TOKENS)
+    return TOKENS
 
 
-@app.route("/api/users", methods=["GET"])
+@app.get("/api/users")
 def get_users():
-    return jsonify(load_users())
+    return load_users()
 
 
-@app.route("/api/users", methods=["POST"])
-def create_user():
-    body = request.get_json(force=True) or {}
-    name = (body.get("name") or "").strip()
-    association = (body.get("association") or "").strip()
+@app.post("/api/users", status_code=201)
+def create_user(body: NewUser):
+    name = body.name.strip()
+    association = body.association.strip()
     if not name:
-        return jsonify({"error": "Name is required"}), 400
+        return error(400, "Name is required")
     if not association:
-        return jsonify({"error": "Association is required"}), 400
+        return error(400, "Association is required")
     with lock:
         save_association(association)
         users = load_users()
         if any(u["name"].lower() == name.lower() for u in users):
-            return jsonify({"error": "A user with that name already exists"}), 409
+            return error(409, "A user with that name already exists")
         slug = "".join(c if c.isalnum() else "_" for c in name.lower()).strip("_")
         user_id = slug
         n = 2
@@ -183,14 +218,13 @@ def create_user():
         }
         users.append(user)
         save_users(users)
-    return jsonify(user), 201
+    return JSONResponse(user, status_code=201)
 
 
-@app.route("/api/next")
-def next_sentence():
-    annotator_id = request.args.get("annotator_id", "")
+@app.get("/api/next")
+def next_sentence(annotator_id: str = Query("")):
     if not annotator_id:
-        return jsonify({"error": "annotator_id required"}), 400
+        return error(400, "annotator_id required")
     with lock:
         annotations = load_annotations()
         s = next_sentence_for(annotator_id, annotations)
@@ -205,54 +239,46 @@ def next_sentence():
     else:
         payload["sentence"] = {k: s[k] for k in ("id", "english_sentence", "category", "sentence_type", "word_count", "length_band")}
         payload["sentence"]["required"] = s["required"]
-    return jsonify(payload)
+    return payload
 
 
-@app.route("/api/annotations", methods=["POST"])
-def submit_annotation():
-    body = request.get_json(force=True) or {}
-    sentence_id = body.get("id")
-    s = SENTENCE_BY_ID.get(sentence_id)
+@app.post("/api/annotations", status_code=201)
+def submit_annotation(body: Submission):
+    s = SENTENCE_BY_ID.get(body.id)
     if s is None:
-        return jsonify({"error": "Unknown sentence id"}), 400
-    annotator_id = (body.get("annotator_id") or "").strip()
+        return error(400, "Unknown sentence id")
+    annotator_id = body.annotator_id.strip()
     if not annotator_id:
-        return jsonify({"error": "annotator_id required"}), 400
-    tokens = body.get("tokens") or []
-    if not isinstance(tokens, list) or not tokens:
-        return jsonify({"error": "At least one token is required"}), 400
-    try:
-        confidence = int(body.get("confidence"))
-    except (TypeError, ValueError):
-        return jsonify({"error": "confidence must be 1-3"}), 400
-    if confidence not in (1, 2, 3):
-        return jsonify({"error": "confidence must be 1-3"}), 400
+        return error(400, "annotator_id required")
+    if not body.tokens:
+        return error(400, "At least one token is required")
+    if body.confidence not in (1, 2, 3):
+        return error(400, "confidence must be 1-3")
 
     gloss_parts = []
     flagged = False
-    for t in tokens:
-        kind = t.get("kind")
-        value = (t.get("value") or "").strip()
-        if kind == "sign":
+    for t in body.tokens:
+        value = t.value.strip()
+        if t.kind == "sign":
             gloss_parts.append(value.upper())
-        elif kind == "fs":
+        elif t.kind == "fs":
             if not value:
-                return jsonify({"error": "Fingerspelling text is required"}), 400
+                return error(400, "Fingerspelling text is required")
             gloss_parts.append(f'fs-"{value}"')
-        elif kind == "sign_not_found":
+        elif t.kind == "sign_not_found":
             flagged = True
             gloss_parts.append(f"SIGN_NOT_FOUND({value.upper()})" if value else "SIGN_NOT_FOUND")
         else:
-            return jsonify({"error": f"Unknown token kind: {kind}"}), 400
+            return error(400, f"Unknown token kind: {t.kind}")
 
     with lock:
         users = {u["id"]: u for u in load_users()}
         user = users.get(annotator_id)
         if user is None:
-            return jsonify({"error": "Unknown annotator"}), 400
+            return error(400, "Unknown annotator")
         annotations = load_annotations()
-        if any(a["id"] == sentence_id and a["annotator_id"] == annotator_id for a in annotations):
-            return jsonify({"error": "You already annotated this sentence"}), 409
+        if any(a["id"] == body.id and a["annotator_id"] == annotator_id for a in annotations):
+            return error(409, "You already annotated this sentence")
         row = {
             "id": s["id"],
             "english_sentence": s["english_sentence"],
@@ -264,21 +290,26 @@ def submit_annotation():
             "annotator_id": annotator_id,
             "annotator_role": user["association"],
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "confidence": confidence,
-            "non_manual_markers": (body.get("non_manual_markers") or "").strip(),
+            "confidence": body.confidence,
+            "non_manual_markers": body.non_manual_markers.strip(),
             "flagged_missing_sign": "yes" if flagged else "no",
-            "notes": (body.get("notes") or "").strip(),
+            "notes": body.notes.strip(),
         }
         append_annotation(row)
-    return jsonify({"ok": True, "gsl_gloss": row["gsl_gloss"]}), 201
+    return JSONResponse({"ok": True, "gsl_gloss": row["gsl_gloss"]}, status_code=201)
 
 
-@app.route("/api/annotations.csv")
+@app.get("/api/annotations.csv")
 def download_annotations():
     if not os.path.exists(ANNOTATIONS_CSV):
-        return ",".join(ANNOTATION_COLUMNS) + "\n", 200, {"Content-Type": "text/csv"}
-    return send_from_directory(DATA, "annotations.csv", as_attachment=True)
+        return PlainTextResponse(",".join(ANNOTATION_COLUMNS) + "\n", media_type="text/csv")
+    return FileResponse(ANNOTATIONS_CSV, media_type="text/csv", filename="annotations.csv")
+
+
+app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=False)
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
